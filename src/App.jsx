@@ -5,33 +5,58 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+const UPDATE_INTERVAL = 5000; // 5 seconds
 
 function App() {
   const [userLocation, setUserLocation] = useState(null);
   const [users, setUsers] = useState([]);
   const [socket, setSocket] = useState(null);
   const [userId, setUserId] = useState(null);
-
+  
   useEffect(() => {
     // Create socket connection
     const newSocket = io(BACKEND_URL);
     setSocket(newSocket);
 
-    // Get user location
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition((position) => {
-        const location = [position.coords.latitude, position.coords.longitude];
-        const uniqueUserId = `User-${Math.random().toString(36).substr(2, 6)}`;
-        
-        setUserLocation(location);
-        setUserId(uniqueUserId);
+    // Function to get and emit user location
+    const updateAndEmitLocation = () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const location = [position.coords.latitude, position.coords.longitude];
+            
+            // Only set initial userId if it hasn't been set
+            if (!userId) {
+              const uniqueUserId = `User-${Math.random().toString(36).substr(2, 6)}`;
+              setUserId(uniqueUserId);
+              setUserLocation(location);
+              // Emit initial location with new ID
+              newSocket.emit('userLocation', { location, id: uniqueUserId });
+            } else {
+              setUserLocation(location);
+              // Emit updated location with existing ID
+              newSocket.emit('userLocation', { location, id: userId });
+            }
+          },
+          (error) => {
+            console.error('Error getting location:', error);
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 5000
+          }
+        );
+      }
+    };
 
-        // Send location to backend
-        newSocket.emit('userLocation', { location, id: uniqueUserId });
-      });
-    }
+    // Get initial location
+    updateAndEmitLocation();
 
-    // Listen for location updates
+    // Set up interval for location updates
+    const locationInterval = setInterval(updateAndEmitLocation, UPDATE_INTERVAL);
+
+    // Listen for location updates from other users
     newSocket.on('updateLocations', (updatedUsers) => {
       console.log('Users received from server:', updatedUsers);
       setUsers(updatedUsers);
@@ -39,9 +64,10 @@ function App() {
 
     // Cleanup on unmount
     return () => {
+      clearInterval(locationInterval);
       newSocket.disconnect();
     };
-  }, []);
+  }, [userId]); // Add userId to dependency array
 
   // Custom marker icon
   const userIcon = L.icon({
@@ -58,12 +84,12 @@ function App() {
       
       <div 
         style={{
-          position: 'absolute', 
-          top: '10px', 
-          right: '10px', 
-          backgroundColor: 'white', 
-          padding: '10px', 
-          borderRadius: '5px', 
+          position: 'absolute',
+          top: '10px',
+          right: '10px',
+          backgroundColor: 'white',
+          padding: '10px',
+          borderRadius: '5px',
           boxShadow: '0 2px 5px rgba(0, 0, 0, 0.2)',
           zIndex: 1000
         }}
@@ -89,17 +115,19 @@ function App() {
           
           {/* Other users markers */}
           {users.map((user) => (
-            <Marker 
-              key={user.id} 
-              position={user.location} 
-              icon={userIcon}
-            >
-              <Popup>
-                User ID: {user.id}
-                <br />
-                Location: {user.location.join(', ')}
-              </Popup>
-            </Marker>
+            user.id !== userId && (
+              <Marker
+                key={user.id}
+                position={user.location}
+                icon={userIcon}
+              >
+                <Popup>
+                  User ID: {user.id}
+                  <br />
+                  Location: {user.location.join(', ')}
+                </Popup>
+              </Marker>
+            )
           ))}
         </MapContainer>
       ) : (
